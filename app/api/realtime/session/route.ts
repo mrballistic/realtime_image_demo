@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
     console.log('SDP offer preview:', offerSDP.substring(0, 200));
 
     // Exchange SDP with OpenAI Realtime API
+    // Try the versioned model instead of the alias
     const response = await fetch('https://api.openai.com/v1/realtime?model=gpt-realtime', {
       method: 'POST',
       headers: {

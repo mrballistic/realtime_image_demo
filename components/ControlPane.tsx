@@ -118,6 +118,33 @@ export function ControlPane() {
         setNotification(errorMsg);
       }
       
+      // Display response failures
+      if (data.type === 'response.done') {
+        const response = data.response as { 
+          status?: string; 
+          status_details?: { 
+            error?: { 
+              type?: string; 
+              message?: string; 
+              code?: string 
+            } 
+          } 
+        };
+        
+        if (response.status === 'failed' && response.status_details?.error) {
+          const error = response.status_details.error;
+          const errorMsg = `Response Failed: ${error.type || 'unknown'} - ${error.message || 'No message'}`;
+          setLastError(errorMsg);
+          setNotification(errorMsg);
+          console.error('❌ RESPONSE FAILURE DETECTED:', {
+            type: error.type,
+            code: error.code,
+            message: error.message,
+            fullResponse: response
+          });
+        }
+      }
+      
       setEvents((prev) => [
         { type: data.type, timestamp: Date.now(), data },
         ...prev.slice(0, 49), // Keep last 50 events
