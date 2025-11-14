@@ -1,6 +1,7 @@
 'use client';
 
-import { Box, Typography, Link, CircularProgress, Alert } from '@mui/material';
+import { Box, Typography, Link, CircularProgress, Alert, IconButton, Tooltip } from '@mui/material';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import Image from 'next/image';
 import { useState, useEffect } from 'react';
 
@@ -17,29 +18,29 @@ export function ImagePane() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchPhoto() {
-      try {
-        setLoading(true);
-        setError(null);
-        
-        // Add timestamp to prevent caching
-        const timestamp = Date.now();
-        const response = await fetch(`/api/unsplash?t=${timestamp}`);
-        
-        if (!response.ok) {
-          throw new Error('Failed to fetch photo');
-        }
-
-        const data = await response.json();
-        setPhoto(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load photo');
-      } finally {
-        setLoading(false);
+  const fetchPhoto = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Add timestamp to prevent caching
+      const timestamp = Date.now();
+      const response = await fetch(`/api/unsplash?t=${timestamp}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch photo');
       }
-    }
 
+      const data = await response.json();
+      setPhoto(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load photo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchPhoto();
   }, []);
 
@@ -89,6 +90,36 @@ export function ImagePane() {
         bgcolor: 'background.paper',
       }}
     >
+      {/* Refresh Button */}
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 16,
+          left: 16,
+          zIndex: 10,
+        }}
+      >
+        <Tooltip title="Change image">
+          <IconButton
+            onClick={fetchPhoto}
+            disabled={loading}
+            sx={{
+              bgcolor: 'rgba(0, 0, 0, 0.6)',
+              color: 'white',
+              '&:hover': {
+                bgcolor: 'rgba(0, 0, 0, 0.8)',
+              },
+              '&.Mui-disabled': {
+                bgcolor: 'rgba(0, 0, 0, 0.3)',
+                color: 'rgba(255, 255, 255, 0.3)',
+              },
+            }}
+          >
+            <RefreshIcon />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
       {/* Image */}
       <Box
         sx={{
