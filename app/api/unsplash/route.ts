@@ -3,26 +3,50 @@ import { NextResponse } from 'next/server';
 export async function GET() {
   const accessKey = process.env.UNSPLASH_ACCESS_KEY;
 
+  // If no API key, use Unsplash Source (no auth required)
   if (!accessKey) {
-    return NextResponse.json(
-      { error: 'Unsplash API key not configured' },
-      { status: 500 }
-    );
+    console.log('No Unsplash API key, using Unsplash Source');
+    
+    const width = 1920;
+    const height = 1080;
+    const randomSeed = Math.floor(Math.random() * 10000);
+    
+    return NextResponse.json({
+      url: `https://source.unsplash.com/random/${width}x${height}?sig=${randomSeed}`,
+      photographer: 'Unsplash Contributors',
+      photographerUrl: 'https://unsplash.com',
+      photoUrl: 'https://unsplash.com',
+      description: 'Random photo from Unsplash',
+    });
   }
 
   try {
+    const randomSeed = Math.random().toString(36).substring(7);
     const response = await fetch(
-      'https://api.unsplash.com/photos/random?orientation=landscape',
+      `https://api.unsplash.com/photos/random?orientation=landscape&sig=${randomSeed}`,
       {
         headers: {
           Authorization: `Client-ID ${accessKey}`,
         },
-        next: { revalidate: 300 }, // Cache for 5 minutes
+        cache: 'no-store', // Disable Next.js cache
       }
     );
 
     if (!response.ok) {
-      throw new Error(`Unsplash API error: ${response.status}`);
+      console.warn(`Unsplash API error ${response.status}, falling back to Unsplash Source`);
+      
+      // Fallback to Unsplash Source
+      const width = 1920;
+      const height = 1080;
+      const randomSeed = Math.floor(Math.random() * 10000);
+      
+      return NextResponse.json({
+        url: `https://source.unsplash.com/random/${width}x${height}?sig=${randomSeed}`,
+        photographer: 'Unsplash Contributors',
+        photographerUrl: 'https://unsplash.com',
+        photoUrl: 'https://unsplash.com',
+        description: 'Random photo from Unsplash',
+      });
     }
 
     const data = await response.json();
@@ -36,9 +60,18 @@ export async function GET() {
     });
   } catch (error) {
     console.error('Error fetching Unsplash photo:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch photo' },
-      { status: 500 }
-    );
+    
+    // Final fallback
+    const width = 1920;
+    const height = 1080;
+    const randomSeed = Math.floor(Math.random() * 10000);
+    
+    return NextResponse.json({
+      url: `https://source.unsplash.com/random/${width}x${height}?sig=${randomSeed}`,
+      photographer: 'Unsplash Contributors',
+      photographerUrl: 'https://unsplash.com',
+      photoUrl: 'https://unsplash.com',
+      description: 'Random photo from Unsplash',
+    });
   }
 }

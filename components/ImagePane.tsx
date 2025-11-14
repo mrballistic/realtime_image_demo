@@ -22,7 +22,10 @@ export function ImagePane() {
       try {
         setLoading(true);
         setError(null);
-        const response = await fetch('/api/unsplash');
+        
+        // Add timestamp to prevent caching
+        const timestamp = Date.now();
+        const response = await fetch(`/api/unsplash?t=${timestamp}`);
         
         if (!response.ok) {
           throw new Error('Failed to fetch photo');
