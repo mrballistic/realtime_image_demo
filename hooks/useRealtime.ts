@@ -209,16 +209,22 @@ export function useRealtime(): UseRealtimeResult {
         // Handle incoming audio track
         peerConnection.ontrack = (event) => {
           const [remoteStream] = event.streams;
+          console.log('Remote track received:', event.track.kind, remoteStream);
 
           // Create or reuse audio element
           if (!audioElementRef.current) {
             const audio = new Audio();
             audio.autoplay = true;
             audioElementRef.current = audio;
+            console.log('Audio element created');
           }
 
           audioElementRef.current.srcObject = remoteStream;
-          console.log('Remote audio track received');
+          console.log('Remote audio stream connected to audio element');
+          
+          // Log audio element state
+          audioElementRef.current.onplay = () => console.log('Audio element playing');
+          audioElementRef.current.onerror = (e) => console.error('Audio element error:', e);
         };
 
         // Add a transceiver for audio (required by OpenAI)
@@ -241,7 +247,7 @@ export function useRealtime(): UseRealtimeResult {
           const sessionConfig = {
             type: 'session.update',
             session: {
-              modalities: ['text', 'audio'],
+              modalities: ['audio', 'text'], // Order matters: audio first for voice responses
               instructions:
                 'You are a helpful AI assistant. Be concise and friendly. When shown an image, describe the key elements first.',
               voice: 'verse',
@@ -256,6 +262,8 @@ export function useRealtime(): UseRealtimeResult {
                 prefix_padding_ms: 300,
                 silence_duration_ms: 500,
               },
+              temperature: 0.8,
+              max_response_output_tokens: 'inf',
             },
           };
 
@@ -276,6 +284,16 @@ export function useRealtime(): UseRealtimeResult {
             // Log errors with full details
             if (data.type === 'error') {
               console.error('OpenAI Realtime API Error:', data);
+            }
+            
+            // Log response.done with full details to debug audio output
+            if (data.type === 'response.done') {
+              console.log('RESPONSE DONE DETAILS:', JSON.stringify(data, null, 2));
+            }
+            
+            // Log session.updated to see actual config
+            if (data.type === 'session.updated') {
+              console.log('SESSION CONFIG:', JSON.stringify(data, null, 2));
             }
             
             emit(data.type, data);

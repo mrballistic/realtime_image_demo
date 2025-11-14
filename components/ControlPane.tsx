@@ -92,9 +92,6 @@ export function ControlPane() {
       // Request response
       send({
         type: 'response.create',
-        response: {
-          output_modalities: ['text', 'audio'],
-        },
       });
 
       setNotification('Screenshot sent! AI is analyzing...');
@@ -140,7 +137,9 @@ export function ControlPane() {
       'response.output_item.added',
       'response.content_part.added',
       'response.audio_transcript.delta',
+      'response.audio_transcript.done',
       'response.audio.delta',
+      'response.audio.done',
       'response.text.delta',
       'response.done',
       'error',

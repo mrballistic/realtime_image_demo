@@ -1,15 +1,25 @@
 # OpenAI Realtime API Reference
 
+**Last Updated**: November 2025  
+**Model**: `gpt-realtime` (latest stable, also versioned as `gpt-realtime-2025-08-28`)  
+**Documentation**: https://platform.openai.com/docs/guides/realtime  
+
 ## Connection Methods
 
-### WebRTC (Preferred)
+### WebRTC (Recommended for Browser)
 ```typescript
 // 1. Create SDP offer
-const pc = new RTCPeerConnection()
+const pc = new RTCPeerConnection({
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+})
+
+// Add audio transceiver BEFORE creating offer
+pc.addTransceiver('audio', { direction: 'sendrecv' })
+
 const offer = await pc.createOffer()
 await pc.setLocalDescription(offer)
 
-// 2. Exchange with OpenAI
+// 2. Exchange with OpenAI via server proxy
 const response = await fetch('/api/realtime/session', {
   method: 'POST',
   headers: { 'Content-Type': 'text/plain' },
@@ -19,47 +29,120 @@ const answerSDP = await response.text()
 await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP })
 
 // 3. Create DataChannel for events
-const dataChannel = pc.createDataChannel('oai-events')
+const dataChannel = pc.createDataChannel('oai-events', { ordered: true })
 ```
 
-### Client Secret (Alternative)
+### Server-Side SDP Exchange
 ```typescript
-// Get ephemeral token
-const response = await fetch('/api/realtime/session', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ method: 'client_secret' })
+// app/api/realtime/session/route.ts
+export async function POST(request: Request) {
+  const offerSDP = await request.text()
+  
+  const response = await fetch(
+    'https://api.openai.com/v1/realtime?model=gpt-realtime',
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/sdp'
+      },
+      body: offerSDP
+    }
+  )
+  
+  const answerSDP = await response.text()
+  return new Response(answerSDP, {
+    headers: { 'Content-Type': 'application/sdp' }
+  })
+}
+```
+
+### WebSocket (Server-Side)
+```typescript
+// Not recommended for browser due to token security
+const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-realtime', {
+  headers: {
+    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+    'OpenAI-Beta': 'realtime=v1'
+  }
 })
-const { client_secret } = await response.json()
-
-// Connect with secret (production model)
-const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-realtime')
 ```
 
-## Event Types
+## Session Configuration
 
-### Session Management
+### Session Update Event (CORRECT FORMAT)
 ```typescript
-// Configure session
+// Send this after DataChannel opens
 {
   type: "session.update",
   session: {
-    type: "realtime",
-    instructions: "Be concise. If the user sends an image, describe key elements first.",
-    output_modalities: ["text", "audio"],
-    audio: {
-      input: { turn_detection: { type: "semantic_vad" } },
-      output: { voice: "verse" }
+    modalities: ["audio", "text"],  // ⚠️ ORDER MATTERS! Audio first for voice responses
+    instructions: "You are a helpful assistant. Be concise and friendly.",
+    voice: "verse",  // Options: alloy, ash, ballad, coral, echo, sage, shimmer, verse
+    input_audio_format: "pcm16",  // or "g711_ulaw", "g711_alaw"
+    output_audio_format: "pcm16",
+    input_audio_transcription: {
+      model: "whisper-1"
+    },
+    turn_detection: {
+      type: "server_vad",  // Server Voice Activity Detection
+      threshold: 0.5,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 500
+    },
+    temperature: 0.8,
+    max_response_output_tokens: "inf"  // or integer
+  }
+}
+
+// Server responds with:
+{ type: "session.created", session: {...} }
+{ type: "session.updated", session: {...} }
+```
+
+**CRITICAL**: The order of modalities array matters! Put `"audio"` first if you want audio responses by default. If `"text"` is first, responses may only contain text even with VAD-triggered responses.
+
+### Common Configuration Issues
+```typescript
+// ❌ WRONG - These parameters don't exist in gpt-realtime
+{
+  session: {
+    output_modalities: [...],  // Wrong! Use 'modalities'
+    audio: {  // Wrong! Flat structure only
+      input: {...},
+      output: {...}
     }
   }
 }
 
-// Session ready
-{ type: "session.created" }
+// ✅ CORRECT - Flat structure
+{
+  session: {
+    modalities: ["text", "audio"],
+    voice: "verse",
+    input_audio_format: "pcm16",
+    output_audio_format: "pcm16",
+    turn_detection: { type: "server_vad", ... }
+  }
+}
 ```
 
-### Conversation Management
+## Conversation & Response Events
+
+### Creating Conversation Items
 ```typescript
+// Add user message with text
+{
+  type: "conversation.item.create",
+  item: {
+    type: "message",
+    role: "user",
+    content: [
+      { type: "input_text", text: "What's in this image?" }
+    ]
+  }
+}
+
 // Add user message with image
 {
   type: "conversation.item.create",
@@ -67,251 +150,383 @@ const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-realtime')
     type: "message",
     role: "user",
     content: [
-      { type: "input_text", text: "What do you see in this screenshot?" },
-      { type: "input_image", image_url: "data:image/png;base64,<<BASE64>>" }
+      { 
+        type: "input_image",
+        image_url: "data:image/png;base64,iVBORw0KGgoAAAA..."
+      }
     ]
   }
 }
 
-// Request response
+// Multi-modal: text + image
+{
+  type: "conversation.item.create",
+  item: {
+    type: "message",
+    role: "user",
+    content: [
+      { type: "input_text", text: "Describe this screenshot:" },
+      { type: "input_image", image_url: "data:image/png;base64,..." }
+    ]
+  }
+}
+```
+
+### Requesting Responses
+```typescript
+// Request response (uses session modalities by default)
+{
+  type: "response.create"
+}
+
+// ❌ WRONG - response.output_modalities doesn't exist
 {
   type: "response.create",
-  response: { output_modalities: ["text"] }
-}
-
-// Cancel response
-{ type: "response.cancel" }
-```
-
-### Response Handling
-```typescript
-// Response events
-{ type: "response.created" }
-{ type: "response.content_part.added" }
-{
-  type: "response.output_text.delta",
-  delta: "I can see a screenshot showing..."
-}
-{ type: "response.output_text.done" }
-{ type: "response.done" }
-
-// Conversation events
-{ type: "conversation.item.added" }
-{ type: "conversation.item.done" }
-```
-
-### Audio Handling (WebSocket only)
-```typescript
-// Append audio buffer
-{
-  type: "input_audio_buffer.append",
-  audio: "<<BASE64_PCM>>"
-}
-
-// Commit buffer
-{ type: "input_audio_buffer.commit" }
-
-// Audio events
-{ type: "input_audio_buffer.speech_started" }
-{ type: "input_audio_buffer.speech_stopped" }
-{ type: "input_audio_buffer.committed" }
-
-// Audio output
-{
-  type: "response.output_audio.delta",
-  audio: "<<BASE64_PCM>>"
-}
-```
-
-## WebRTC Implementation Patterns
-
-### Hook Structure
-```typescript
-interface UseRealtimeResult {
-  isConnected: boolean
-  send: (event: any) => void
-  on: (type: string, handler: (data: any) => void) => void
-  off: (type: string, handler: (data: any) => void) => void
-  startMic: () => Promise<void>
-  stopMic: () => void
-}
-
-function useRealtime(): UseRealtimeResult {
-  const [pc, setPc] = useState<RTCPeerConnection | null>(null)
-  const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null)
-  const [isConnected, setIsConnected] = useState(false)
-  
-  // Implementation...
-}
-```
-
-### DataChannel Events
-```typescript
-dataChannel.onmessage = (event) => {
-  try {
-    const data = JSON.parse(event.data)
-    eventEmitter.emit(data.type, data)
-  } catch (error) {
-    console.error('Failed to parse DataChannel message:', error)
+  response: {
+    output_modalities: ["text"]  // This parameter is invalid!
   }
 }
 
+// Cancel ongoing response
+{
+  type: "response.cancel"
+}
+```
+
+### Response Events
+```typescript
+// Response lifecycle
+{ type: "response.created", response: {...} }
+{ type: "response.output_item.added", output_index: 0, item: {...} }
+{ type: "response.content_part.added", content_index: 0, part: {...} }
+
+// Text output
+{
+  type: "response.text.delta",
+  response_id: "resp_001",
+  item_id: "msg_001",
+  output_index: 0,
+  content_index: 0,
+  delta: "I can see a screenshot..."
+}
+{ type: "response.text.done", text: "..." }
+
+// Audio output
+{
+  type: "response.audio.delta",
+  response_id: "resp_001",
+  item_id: "msg_001", 
+  output_index: 0,
+  content_index: 0,
+  delta: "<<BASE64_PCM>>"
+}
+{ type: "response.audio.done" }
+
+// Audio transcript
+{
+  type: "response.audio_transcript.delta",
+  delta: "Hello, how can I help you?"
+}
+{ type: "response.audio_transcript.done", transcript: "..." }
+
+// Completion
+{ 
+  type: "response.done",
+  response: {
+    status: "completed",  // or "cancelled", "failed", "incomplete"
+    usage: {
+      total_tokens: 150,
+      input_tokens: 50,
+      output_tokens: 100
+    }
+  }
+}
+```
+
+## Audio Input Events (WebRTC Auto-Managed)
+
+### WebRTC Audio Flow
+```typescript
+// With WebRTC + server_vad, audio is automatically managed:
+// 1. Add audio track to peer connection
+const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+const audioTrack = stream.getAudioTracks()[0]
+const sender = pc.getSenders().find(s => s.track?.kind === 'audio')
+await sender.replaceTrack(audioTrack)  // Use replaceTrack, not addTrack!
+
+// 2. Server automatically detects speech and commits buffer
+// You'll receive these events automatically:
+{ type: "input_audio_buffer.speech_started" }
+{ type: "input_audio_buffer.speech_stopped" }  
+{ type: "input_audio_buffer.committed" }
+{ type: "conversation.item.created", item: { type: "message", role: "user", ... } }
+
+// 3. Response is automatically triggered by server_vad
+{ type: "response.created" }
+{ type: "response.audio.delta", delta: "<<BASE64>>" }
+{ type: "response.done" }
+```
+
+### Manual Audio Control (WebSocket Only)
+```typescript
+// Only needed if using WebSocket connection without server_vad
+{
+  type: "input_audio_buffer.append",
+  audio: "<<BASE64_PCM16>>"
+}
+
+{ type: "input_audio_buffer.commit" }
+
+{ type: "input_audio_buffer.clear" }
+```
+
+### Input Audio Transcription
+```typescript
+// Transcription events (if enabled in session config)
+{
+  type: "conversation.item.input_audio_transcription.delta",
+  item_id: "msg_001",
+  content_index: 0,
+  delta: "Hello, can you help me"
+}
+
+{
+  type: "conversation.item.input_audio_transcription.completed",
+  item_id: "msg_001",
+  content_index: 0,
+  transcript: "Hello, can you help me with this?"
+}
+```
+
+## Critical WebRTC Patterns
+
+### Audio Track Management (IMPORTANT!)
+```typescript
+// ❌ WRONG - Never use addTrack after initial setup
+const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+const track = stream.getAudioTracks()[0]
+pc.addTrack(track, stream)  // This causes renegotiation and breaks DataChannel!
+
+// ✅ CORRECT - Always use replaceTrack
+// 1. Create transceiver during setup (BEFORE creating offer)
+pc.addTransceiver('audio', { direction: 'sendrecv' })
+
+// 2. Create offer and complete SDP exchange
+const offer = await pc.createOffer()
+await pc.setLocalDescription(offer)
+// ... exchange SDP ...
+
+// 3. Later, when user clicks mic button, use replaceTrack
+const startMic = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  const audioTrack = stream.getAudioTracks()[0]
+  
+  // Find the audio sender from the transceiver we created
+  const sender = pc.getSenders().find(s => s.track === null || s.track.kind === 'audio')
+  
+  if (sender) {
+    await sender.replaceTrack(audioTrack)  // No renegotiation!
+  }
+}
+
+// 4. To stop mic, replace with null
+const stopMic = () => {
+  const sender = pc.getSenders().find(s => s.track?.kind === 'audio')
+  if (sender) {
+    sender.replaceTrack(null)  // Stops sending audio without renegotiation
+  }
+  
+  // Stop the local track
+  localStream?.getAudioTracks().forEach(track => track.stop())
+}
+```
+
+### Remote Audio Playback
+```typescript
+// Handle incoming audio track from OpenAI
+pc.ontrack = (event) => {
+  if (event.track.kind === 'audio') {
+    const [remoteStream] = event.streams
+    
+    // Create audio element for playback
+    const audioElement = new Audio()
+    audioElement.autoplay = true
+    audioElement.srcObject = remoteStream
+    
+    // Start playback
+    audioElement.play().catch(err => {
+      console.error('Audio playback failed:', err)
+      // May need user interaction to enable autoplay
+    })
+  }
+}
+```
+
+### DataChannel Event Handling
+```typescript
+// Create DataChannel
+const dataChannel = pc.createDataChannel('oai-events', { ordered: true })
+
 dataChannel.onopen = () => {
-  setIsConnected(true)
+  console.log('DataChannel opened')
+  
+  // Send session configuration immediately
+  dataChannel.send(JSON.stringify({
+    type: 'session.update',
+    session: {
+      modalities: ['text', 'audio'],
+      instructions: '...',
+      voice: 'verse',
+      input_audio_format: 'pcm16',
+      output_audio_format: 'pcm16',
+      turn_detection: { type: 'server_vad', ... }
+    }
+  }))
+}
+
+dataChannel.onmessage = (event) => {
+  try {
+    const data = JSON.parse(event.data)
+    console.log('Received event:', data.type, data)
+    
+    // Handle errors
+    if (data.type === 'error') {
+      console.error('API Error:', data.error)
+    }
+    
+    // Emit to event handlers
+    eventEmitter.emit(data.type, data)
+  } catch (error) {
+    console.error('Failed to parse message:', error)
+  }
 }
 
 dataChannel.onclose = () => {
-  setIsConnected(false)
+  console.log('DataChannel closed')
+}
+
+dataChannel.onerror = (error) => {
+  console.error('DataChannel error:', error)
+}
+
+// Sending events
+const send = (event: any) => {
+  if (dataChannel?.readyState === 'open') {
+    dataChannel.send(JSON.stringify(event))
+  } else {
+    console.warn('DataChannel not ready:', event.type)
+  }
 }
 ```
 
-### Audio Track Management
+### Connection State Management
 ```typescript
-const startMic = async () => {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  const track = stream.getAudioTracks()[0]
+pc.onconnectionstatechange = () => {
+  console.log('Connection state:', pc.connectionState)
   
-  pc.addTrack(track, stream)
-  
-  // Optional: add level meter
-  const audioContext = new AudioContext()
-  const analyser = audioContext.createAnalyser()
-  const source = audioContext.createMediaStreamSource(stream)
-  source.connect(analyser)
+  switch (pc.connectionState) {
+    case 'connected':
+      console.log('WebRTC connected')
+      break
+    case 'disconnected':
+    case 'failed':
+      console.error('Connection failed, attempting reconnect...')
+      // Implement reconnection logic
+      break
+    case 'closed':
+      console.log('Connection closed')
+      break
+  }
 }
 
-const stopMic = () => {
-  const senders = pc.getSenders()
-  senders.forEach(sender => {
-    if (sender.track && sender.track.kind === 'audio') {
-      pc.removeTrack(sender)
-      sender.track.stop()
-    }
-  })
-  
-  // Cancel any pending response
-  send({ type: 'response.cancel' })
+pc.oniceconnectionstatechange = () => {
+  console.log('ICE connection state:', pc.iceConnectionState)
 }
 ```
 
-## Error Handling Patterns
+## Error Handling
 
-### Connection Errors
+### Common API Errors
+```typescript
+// Error event structure
+{
+  type: "error",
+  error: {
+    type: "unknown_parameter",
+    code: "unknown_parameter", 
+    message: "Unknown parameter: 'session.output_modalities'.",
+    param: "session.output_modalities"
+  }
+}
+
+// Common errors:
+// - "unknown_parameter": Using beta API params on GA model
+// - "invalid_request_error": Malformed request
+// - "authentication_error": Invalid API key
+// - "rate_limit_error": Too many requests
+```
+
+### Connection Error Handling
 ```typescript
 pc.onconnectionstatechange = () => {
   if (pc.connectionState === 'failed') {
     console.error('WebRTC connection failed')
-    // Retry logic here
+    // Retry with backoff
+    setTimeout(() => reconnect(), 1000)
   }
 }
 
-pc.onicegatheringstatechange = () => {
-  if (pc.iceGatheringState === 'complete') {
-    // Connection ready
-  }
-}
-```
-
-### DataChannel Errors
-```typescript
 dataChannel.onerror = (error) => {
   console.error('DataChannel error:', error)
-  // Fallback to WebSocket or retry
-}
-
-// Send with error handling
-const send = (event: any) => {
-  if (dataChannel?.readyState === 'open') {
-    try {
-      dataChannel.send(JSON.stringify(event))
-    } catch (error) {
-      console.error('Failed to send message:', error)
-      // Queue for retry or show user error
-    }
-  } else {
-    console.warn('DataChannel not ready, queueing message')
-    // Queue message for when channel is ready
-  }
+  // Show user error, attempt recovery
 }
 ```
 
-### Permission Handling
+### Microphone Permissions
 ```typescript
 const requestMicPermission = async () => {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    stream.getTracks().forEach(track => track.stop()) // Clean up test stream
-    return true
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    })
+    return { success: true, stream }
   } catch (error) {
     if (error.name === 'NotAllowedError') {
-      showError('Microphone permission denied')
+      return { success: false, error: 'Microphone permission denied' }
     } else if (error.name === 'NotFoundError') {
-      showError('No microphone found')
+      return { success: false, error: 'No microphone found' }
     } else {
-      showError('Microphone access failed')
+      return { success: false, error: 'Microphone access failed' }
     }
-    return false
   }
 }
 ```
 
-## Server-Side Integration
-
-### SDP Exchange Endpoint
-```typescript
-// app/api/realtime/session/route.ts
-export async function POST(request: Request) {
-  const offer = await request.text()
-  
-  const response = await fetch('https://api.openai.com/v1/realtime/calls', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-      'Content-Type': 'application/sdp'
-    },
-    body: offer
-  })
-  
-  const answer = await response.text()
-  return new Response(answer, {
-    headers: { 'Content-Type': 'application/sdp' }
-  })
-}
-```
-
-### Client Secret Endpoint (Alternative)
-```typescript
-export async function POST(request: Request) {
-  const { method } = await request.json()
-  
-  if (method === 'client_secret') {
-    const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-realtime',
-        ttl: 600 // 10 minutes
-      })
-    })
-    
-    return Response.json(await response.json())
-  }
-}
-```
-
-## Image Processing Patterns
+## Image Handling
 
 ### Screenshot Capture
 ```typescript
 const captureScreenshot = async (): Promise<string> => {
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
+  // Request screen share
+  const stream = await navigator.mediaDevices.getDisplayMedia({ 
+    video: { mediaSource: 'screen' }
+  })
+  
+  // Create video element
   const video = document.createElement('video')
   video.srcObject = stream
   await video.play()
   
+  // Wait for video metadata
+  await new Promise(resolve => {
+    video.onloadedmetadata = resolve
+  })
+  
+  // Capture frame to canvas
   const canvas = document.createElement('canvas')
   canvas.width = video.videoWidth
   canvas.height = video.videoHeight
@@ -319,90 +534,122 @@ const captureScreenshot = async (): Promise<string> => {
   const ctx = canvas.getContext('2d')!
   ctx.drawImage(video, 0, 0)
   
+  // Stop stream
   stream.getTracks().forEach(track => track.stop())
   
+  // Return base64 data URL
   return canvas.toDataURL('image/png')
 }
 ```
 
-### Image Size Limits
+### Image Optimization
 ```typescript
-const resizeImage = (dataUrl: string, maxWidth: number = 1280): string => {
+const optimizeImage = async (
+  dataUrl: string, 
+  maxWidth: number = 1280,
+  quality: number = 0.8
+): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image()
+    
     img.onload = () => {
       const canvas = document.createElement('canvas')
       const ctx = canvas.getContext('2d')!
       
-      const ratio = Math.min(maxWidth / img.width, maxWidth / img.height)
+      // Calculate dimensions
+      const ratio = Math.min(maxWidth / img.width, maxWidth / img.height, 1)
       canvas.width = img.width * ratio
       canvas.height = img.height * ratio
       
+      // Draw resized image
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-      resolve(canvas.toDataURL('image/png', 0.8))
+      
+      // Return optimized data URL
+      resolve(canvas.toDataURL('image/png', quality))
     }
+    
     img.src = dataUrl
   })
 }
 ```
 
-## Performance Considerations
-
-### Memory Management
+### Sending Images to Model
 ```typescript
-// Clean up resources
-const cleanup = () => {
-  if (pc) {
-    pc.close()
-    setPc(null)
-  }
-  
-  if (dataChannel) {
-    dataChannel.close()
-    setDataChannel(null)
-  }
-  
-  // Stop all tracks
-  localStream?.getTracks().forEach(track => track.stop())
-}
+// 1. Capture and optimize
+const screenshot = await captureScreenshot()
+const optimized = await optimizeImage(screenshot, 1280, 0.8)
 
-// Use effect cleanup
-useEffect(() => {
-  return cleanup
-}, [])
+// 2. Create conversation item
+send({
+  type: 'conversation.item.create',
+  item: {
+    type: 'message',
+    role: 'user',
+    content: [
+      { type: 'input_image', image_url: optimized }
+    ]
+  }
+})
+
+// 3. Request response
+send({ type: 'response.create' })
 ```
 
-### Event Listener Management
+## Best Practices
+
+### 1. Always Use replaceTrack for Audio
 ```typescript
-const eventHandlers = new Map<string, Set<(data: any) => void>>()
+// ❌ NEVER do this after initial setup
+pc.addTrack(audioTrack, stream)  // Breaks DataChannel!
 
-const on = (type: string, handler: (data: any) => void) => {
-  if (!eventHandlers.has(type)) {
-    eventHandlers.set(type, new Set())
-  }
-  eventHandlers.get(type)!.add(handler)
+// ✅ ALWAYS do this
+const sender = pc.getSenders().find(s => s.track?.kind === 'audio')
+await sender.replaceTrack(audioTrack)
+```
+
+### 2. Create Audio Transceiver Early
+```typescript
+// Do this BEFORE creating SDP offer
+pc.addTransceiver('audio', { direction: 'sendrecv' })
+const offer = await pc.createOffer()
+```
+
+### 3. Configure Session Immediately
+```typescript
+dataChannel.onopen = () => {
+  // Send session config as first message
+  send({
+    type: 'session.update',
+    session: { modalities: ['text', 'audio'], ... }
+  })
 }
+```
 
-const off = (type: string, handler: (data: any) => void) => {
-  const handlers = eventHandlers.get(type)
-  if (handlers) {
-    handlers.delete(handler)
-    if (handlers.size === 0) {
-      eventHandlers.delete(type)
-    }
+### 4. Handle Remote Audio Properly
+```typescript
+pc.ontrack = (event) => {
+  if (event.track.kind === 'audio') {
+    const audio = new Audio()
+    audio.autoplay = true
+    audio.srcObject = event.streams[0]
+    audio.play().catch(console.error)
   }
 }
+```
 
-const emit = (type: string, data: any) => {
-  const handlers = eventHandlers.get(type)
-  if (handlers) {
-    handlers.forEach(handler => {
-      try {
-        handler(data)
-      } catch (error) {
-        console.error(`Error in event handler for ${type}:`, error)
-      }
-    })
-  }
+### 5. Clean Up Resources
+```typescript
+const cleanup = () => {
+  // Stop local tracks
+  localStream?.getTracks().forEach(track => track.stop())
+  
+  // Close DataChannel
+  dataChannel?.close()
+  
+  // Close PeerConnection
+  pc?.close()
+  
+  // Remove audio element
+  audioElement.srcObject = null
 }
 ```
