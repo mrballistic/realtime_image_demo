@@ -30,6 +30,7 @@ export function ControlPane() {
     isMicActive,
     startMic,
     stopMic,
+    enableAudio,
     send,
     on,
     off,
@@ -64,6 +65,13 @@ export function ControlPane() {
     setIsCapturing(true);
 
     try {
+      // Enable audio playback (requires user interaction)
+      try {
+        await enableAudio();
+      } catch (err) {
+        console.warn('Could not enable audio playback yet:', err);
+      }
+
       // Capture screenshot
       const screenshot = await captureScreenshot();
       
@@ -89,9 +97,12 @@ export function ControlPane() {
         },
       });
 
-      // Request response
+      // Request response with audio
       send({
         type: 'response.create',
+        response: {
+          modalities: ['text', 'audio'],
+        },
       });
 
       setNotification('Screenshot sent! AI is analyzing...');

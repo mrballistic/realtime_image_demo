@@ -18,6 +18,7 @@ interface UseRealtimeResult {
   off: (type: string, handler: EventHandler) => void;
   startMic: () => Promise<void>;
   stopMic: () => void;
+  enableAudio: () => Promise<void>;
   isMicActive: boolean;
   cleanup: () => void;
 }
@@ -36,6 +37,7 @@ export function useRealtime(): UseRealtimeResult {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioQueueRef = useRef<Int16Array[]>([]);
   const isPlayingRef = useRef(false);
+  const activeResponseRef = useRef<string | null>(null); // Track active response ID
 
   // Event emitter functions
   const on = useCallback((type: string, handler: EventHandler) => {
@@ -226,11 +228,29 @@ export function useRealtime(): UseRealtimeResult {
 
     setIsMicActive(false);
 
-    // Cancel any pending response
-    send({ type: 'response.cancel' });
+    // Only cancel if there's an active response
+    if (activeResponseRef.current) {
+      console.log('Cancelling active response:', activeResponseRef.current);
+      send({ type: 'response.cancel' });
+    } else {
+      console.log('No active response to cancel');
+    }
 
     console.log('Microphone stopped');
   }, [pc, send]);
+
+  // Enable audio playback (requires user interaction)
+  const enableAudio = useCallback(async () => {
+    if (audioElementRef.current) {
+      try {
+        await audioElementRef.current.play();
+        console.log('✅ Audio playback enabled');
+      } catch (err) {
+        console.warn('Could not enable audio playback:', err);
+        throw err;
+      }
+    }
+  }, []);
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -294,10 +314,10 @@ export function useRealtime(): UseRealtimeResult {
           // Create or reuse audio element
           if (!audioElementRef.current) {
             const audio = new Audio();
-            audio.autoplay = true;
-            audio.volume = 1.0; // Ensure volume is at maximum
+            audio.autoplay = false; // Don't autoplay - requires user interaction
+            audio.volume = 1.0;
             audioElementRef.current = audio;
-            console.log('Audio element created with autoplay=true, volume=1.0');
+            console.log('Audio element created (autoplay disabled until user interaction)');
             
             // Add to DOM to ensure playback (some browsers require this)
             document.body.appendChild(audio);
@@ -305,12 +325,7 @@ export function useRealtime(): UseRealtimeResult {
           }
 
           audioElementRef.current.srcObject = remoteStream;
-          console.log('Remote audio stream connected to audio element');
-          
-          // Force play in case autoplay was blocked
-          audioElementRef.current.play()
-            .then(() => console.log('✅ Audio element playing successfully'))
-            .catch((err) => console.error('❌ Audio element play failed:', err));
+          console.log('Remote audio stream connected to audio element (ready to play after user interaction)');
           
           // Log audio element state
           audioElementRef.current.onplay = () => console.log('🔊 Audio element PLAYING');
@@ -383,6 +398,7 @@ export function useRealtime(): UseRealtimeResult {
               console.log('🗑️ Clearing audio queue');
               audioQueueRef.current = [];
               isPlayingRef.current = false;
+              activeResponseRef.current = null; // Clear active response on cancel
             }
             
             // Log errors with full details
@@ -393,6 +409,11 @@ export function useRealtime(): UseRealtimeResult {
             // Log response lifecycle events
             if (data.type === 'response.created') {
               console.log('🎬 RESPONSE CREATED:', JSON.stringify(data, null, 2));
+              // Track active response
+              const responseId = (data as { response?: { id?: string } }).response?.id;
+              if (responseId) {
+                activeResponseRef.current = responseId;
+              }
             }
             
             if (data.type === 'response.output_item.added') {
@@ -431,6 +452,9 @@ export function useRealtime(): UseRealtimeResult {
             // Log response.done with full details to debug audio output
             if (data.type === 'response.done') {
               console.log('✅ RESPONSE DONE DETAILS:', JSON.stringify(data, null, 2));
+              
+              // Clear active response
+              activeResponseRef.current = null;
               
               const resp = (data as Record<string, unknown>).response as Record<string, unknown>;
               if (resp.status === 'failed') {
@@ -520,6 +544,7 @@ export function useRealtime(): UseRealtimeResult {
     off,
     startMic,
     stopMic,
+    enableAudio,
     isMicActive,
     cleanup,
   };
