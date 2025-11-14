@@ -206,3 +206,88 @@ applyTo: '**'
   - Multiple component files for source message removal
 
 **Status**: **PRODUCTION READY** - Modern chat interface with clean, professional appearance. Multi-layer message filtering ensures distraction-free user experience. Comprehensive animation system provides feedback throughout application lifecycle.
+
+## Recent Session: Realtime API Voice & Live Screen Sharing (November 14, 2025)
+
+**Context**: Enhanced OpenAI Realtime API demo with voice responses, live screen sharing mode, and automatic image analysis workflow.
+
+**Key Achievements**:
+
+**Audio Playback Fix**: **COMPLETE** ✅
+
+- **Issue**: Audio responses generated but not playing due to browser autoplay policy
+- **Root Cause**: Audio element attempted to play before user interaction
+- **Solution**: Added `enableAudio()` function called on mic/screen share button clicks
+- **Implementation**: 
+  - Updated `/hooks/useRealtime.ts` with `enableAudio()` callback
+  - Modified `startMic()` to enable audio on user interaction
+  - Removed automatic `.play()` attempts in `ontrack` handler
+  - Set `autoplay: false` on audio element creation
+- **Result**: Audio plays reliably after first user interaction (mic or screen share)
+
+**Active Response Tracking**: **COMPLETE** ✅
+
+- **Issue**: Errors when stopping mic or changing images during AI response
+- **Error**: "Cancellation failed: no active response found (response_cancel_not_active)"
+- **Solution**: Track active responses with `activeResponseRef` in useRealtime hook
+- **Implementation**:
+  - Set `activeResponseRef.current` on `response.created` event
+  - Clear on `response.done` and `response.cancelled` events
+  - Added `cancelResponse()` function that checks before canceling
+  - Updated `stopMic()` to only cancel if response is active
+- **Result**: Clean cancellation without errors
+
+**Live Screen Sharing Mode**: **COMPLETE** ✅
+
+- **Toggle UI**: Screen share button now toggles on/off (red when active)
+- **Persistent Stream**: Captures `MediaStream` once, reuses for all screenshots
+- **Architecture**:
+  - `/app/page.tsx` manages `isScreenSharing` state
+  - `ControlPane` exposed via `forwardRef` with `captureAndSend()` method
+  - `ImagePane` accepts `onImageChange` callback prop
+  - Parent orchestrates auto-capture on image refresh
+- **Permissions**: Only prompts for screen sharing once, stream persists until stopped
+- **Browser Stop Detection**: Detects when user stops sharing via browser UI
+
+**Auto-Capture Workflow**: **COMPLETE** ✅
+
+- **Refresh Button**: Added to upper-left of Unsplash image (MUI RefreshIcon)
+- **Flow**:
+  1. User clicks screen share → selects window → AI analyzes
+  2. User clicks refresh button → new image loads
+  3. System waits 1 second for image to render
+  4. Auto-captures screenshot of new image
+  5. AI analyzes and responds with voice
+  6. Repeat steps 2-5 as desired
+- **Timing**: 1-second delay ensures Next.js Image component fully renders
+- **Cancellation**: Auto-cancels any in-progress response before new screenshot
+
+**Screen Capture Optimization**: **COMPLETE** ✅
+
+- **Stream Reuse**: 
+  - `captureAndSend(streamToUse?)` accepts optional stream parameter
+  - First capture via `getDisplayMedia()` stores stream in state
+  - Subsequent captures reuse stored stream via `captureFromStream()`
+  - No permission re-prompts after initial grant
+- **Image Focus Prompt**: Updated AI prompt to ignore UI elements, focus on main photograph
+- **Prompt**: "Describe only the main image in this screenshot. Ignore any UI elements, buttons, or interface components. Focus solely on the photograph or visual content being displayed."
+
+**Technical Implementation**:
+
+- **Files Modified**:
+  - `/hooks/useRealtime.ts` - Added `enableAudio()`, `cancelResponse()`, `activeResponseRef` tracking
+  - `/components/ControlPane.tsx` - Toggle screen sharing, persistent stream, forwardRef pattern
+  - `/components/ImagePane.tsx` - Added refresh button, `onImageChange` callback
+  - `/app/page.tsx` - Screen sharing state management, auto-capture orchestration
+  - `/lib/screenshot.ts` - Used for initial capture, augmented with in-component stream capture
+
+**Performance & UX**:
+
+- **Single Permission Prompt**: MediaStream captured once and reused
+- **1-Second Render Delay**: Ensures accurate screenshot of new image
+- **Smart Cancellation**: Only cancels responses when actually active
+- **Audio Reliability**: User interaction enables playback, no autoplay errors
+- **Visual Feedback**: Red toggle button, loading states, notifications
+
+**Status**: **PRODUCTION READY** - Complete live screen sharing workflow with voice responses. Users can continuously analyze different images by refreshing, with AI providing voice descriptions. Clean error handling, proper stream management, and browser policy compliance throughout.
+
