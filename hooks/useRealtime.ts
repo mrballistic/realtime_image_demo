@@ -19,6 +19,7 @@ interface UseRealtimeResult {
   startMic: () => Promise<void>;
   stopMic: () => void;
   enableAudio: () => Promise<void>;
+  cancelResponse: () => void;
   isMicActive: boolean;
   cleanup: () => void;
 }
@@ -251,6 +252,16 @@ export function useRealtime(): UseRealtimeResult {
       }
     }
   }, []);
+
+  // Cancel active response (only if there is one)
+  const cancelResponse = useCallback(() => {
+    if (activeResponseRef.current) {
+      console.log('Cancelling active response:', activeResponseRef.current);
+      send({ type: 'response.cancel' });
+    } else {
+      console.log('No active response to cancel');
+    }
+  }, [send]);
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -545,6 +556,7 @@ export function useRealtime(): UseRealtimeResult {
     startMic,
     stopMic,
     enableAudio,
+    cancelResponse,
     isMicActive,
     cleanup,
   };

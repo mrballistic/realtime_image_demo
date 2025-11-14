@@ -13,7 +13,11 @@ interface UnsplashPhoto {
   description: string;
 }
 
-export function ImagePane() {
+interface ImagePaneProps {
+  onImageChange?: () => void;
+}
+
+export function ImagePane({ onImageChange }: ImagePaneProps) {
   const [photo, setPhoto] = useState<UnsplashPhoto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +37,11 @@ export function ImagePane() {
 
       const data = await response.json();
       setPhoto(data);
+      
+      // Notify parent that image changed (parent will handle timing)
+      if (onImageChange) {
+        onImageChange();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load photo');
     } finally {
@@ -42,6 +51,7 @@ export function ImagePane() {
 
   useEffect(() => {
     fetchPhoto();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (loading) {

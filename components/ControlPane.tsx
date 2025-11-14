@@ -13,8 +13,9 @@ import {
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
 import ScreenShareIcon from '@mui/icons-material/ScreenShare';
+import StopScreenShareIcon from '@mui/icons-material/StopScreenShare';
 import { useRealtime } from '@/hooks/useRealtime';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import { captureScreenshot, optimizeImage } from '@/lib/screenshot';
 
 interface Event {
@@ -23,7 +24,17 @@ interface Event {
   data?: unknown;
 }
 
-export function ControlPane() {
+interface ControlPaneProps {
+  isScreenSharing: boolean;
+  onScreenShareToggle: (value: boolean) => void;
+}
+
+export interface ControlPaneRef {
+  captureAndSend: () => Promise<void>;
+}
+
+export const ControlPane = forwardRef<ControlPaneRef, ControlPaneProps>(
+  ({ isScreenSharing, onScreenShareToggle }, ref) => {
   const {
     isConnected,
     connectionState,
@@ -31,6 +42,7 @@ export function ControlPane() {
     startMic,
     stopMic,
     enableAudio,
+    cancelResponse,
     send,
     on,
     off,
@@ -40,6 +52,7 @@ export function ControlPane() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
 
   // Handle microphone toggle
   const handleMicToggle = async () => {
@@ -55,8 +68,48 @@ export function ControlPane() {
     }
   };
 
-  // Handle screen share
-  const handleScreenShare = async () => {
+  // Capture screenshot from existing stream or create new one
+  const captureFromStream = async (stream: MediaStream): Promise<string> => {
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+
+    return new Promise((resolve, reject) => {
+      video.onloadedmetadata = () => {
+        video.play();
+
+        requestAnimationFrame(() => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              throw new Error('Failed to get canvas context');
+            }
+
+            ctx.drawImage(video, 0, 0);
+            video.remove();
+
+            const dataUrl = canvas.toDataURL('image/png', 0.8);
+            resolve(dataUrl);
+          } catch (error) {
+            video.remove();
+            reject(error);
+          }
+        });
+      };
+
+      video.onerror = (error) => {
+        video.remove();
+        reject(error);
+      };
+    });
+  };
+
+  // Capture and send screenshot (exposed via ref and used internally)
+  const captureAndSend = async (streamToUse?: MediaStream) => {
     if (!isConnected) {
       setNotification('Not connected to OpenAI');
       return;
@@ -72,8 +125,20 @@ export function ControlPane() {
         console.warn('Could not enable audio playback yet:', err);
       }
 
-      // Capture screenshot
-      const screenshot = await captureScreenshot();
+      // Cancel any active response before sending new screenshot (only if there is one)
+      cancelResponse();
+
+      let screenshot: string;
+      
+      const stream = streamToUse || screenStream;
+      
+      if (stream) {
+        // Reuse existing stream (no permission prompt)
+        screenshot = await captureFromStream(stream);
+      } else {
+        // First time - request permission
+        screenshot = await captureScreenshot();
+      }
       
       // Optimize image size
       const optimizedImage = await optimizeImage(screenshot);
@@ -87,7 +152,7 @@ export function ControlPane() {
           content: [
             {
               type: 'input_text',
-              text: 'What do you see in this screenshot?',
+              text: 'Describe only the main image in this screenshot. Ignore any UI elements, buttons, or interface components. Focus solely on the photograph or visual content being displayed.',
             },
             {
               type: 'input_image',
@@ -115,6 +180,51 @@ export function ControlPane() {
       setIsCapturing(false);
     }
   };
+
+  // Handle screen share toggle
+  const handleScreenShareToggle = async () => {
+    if (isScreenSharing) {
+      // Turn off screen sharing - stop the stream
+      if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
+        setScreenStream(null);
+      }
+      onScreenShareToggle(false);
+      setNotification('Screen sharing stopped');
+    } else {
+      // Turn on screen sharing - request permission and capture stream
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        
+        setScreenStream(stream);
+        
+        // Take first screenshot - pass stream directly to avoid state delay
+        await captureAndSend(stream);
+        onScreenShareToggle(true);
+        
+        // Listen for when user stops sharing via browser UI
+        stream.getVideoTracks()[0].onended = () => {
+          setScreenStream(null);
+          onScreenShareToggle(false);
+          setNotification('Screen sharing stopped');
+        };
+      } catch (error) {
+        console.error('Screen share failed:', error);
+        setNotification('Screen sharing permission denied');
+      }
+    }
+  };
+
+  // Expose captureAndSend to parent via ref
+  useImperativeHandle(ref, () => ({
+    captureAndSend,
+  }));
 
   // Listen to realtime events
   useEffect(() => {
@@ -255,26 +365,26 @@ export function ControlPane() {
         <Box>
           <IconButton
             size="large"
-            color="secondary"
-            onClick={handleScreenShare}
+            color={isScreenSharing ? 'error' : 'secondary'}
+            onClick={handleScreenShareToggle}
             disabled={!isConnected || isCapturing}
             sx={{
               width: 64,
               height: 64,
-              bgcolor: 'secondary.main',
+              bgcolor: isScreenSharing ? 'error.main' : 'secondary.main',
               color: 'background.paper',
               '&:hover': {
-                bgcolor: 'secondary.dark',
+                bgcolor: isScreenSharing ? 'error.dark' : 'secondary.dark',
               },
               '&:disabled': {
                 bgcolor: 'action.disabledBackground',
               },
             }}
           >
-            <ScreenShareIcon />
+            {isScreenSharing ? <StopScreenShareIcon /> : <ScreenShareIcon />}
           </IconButton>
           <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-            {isCapturing ? 'Capturing...' : 'Share Screen'}
+            {isCapturing ? 'Capturing...' : isScreenSharing ? 'Stop Sharing' : 'Share Screen'}
           </Typography>
         </Box>
       </Stack>
@@ -348,4 +458,6 @@ export function ControlPane() {
       />
     </Box>
   );
-}
+});
+
+ControlPane.displayName = 'ControlPane';
